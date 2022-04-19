@@ -71,7 +71,6 @@ flags.DEFINE_bool("generate", False, "Generate image from latent")
 flags.DEFINE_bool("generate_grid", False, "Generate grid of images from latent space (only for 2D latent)")
 flags.DEFINE_bool("plot", False, "Plot latent space")
 flags.DEFINE_integer("latent_dim", 5, "Latent dimension")
-
 # Train
 flags.DEFINE_integer("epochs", 500, "Number of training epochs")
 flags.DEFINE_integer("train_samples", 3600, "Number of training samples from MNIST")
@@ -83,16 +82,17 @@ flags.DEFINE_list("latent_vec", None, "Latent vector (use with --generate flag)"
 
 
 
-
+input_dim=200
 #x=mat_contents['Y_T']
-fname = 'Synthetic_Access_SNR10.mat'
-mat_contents=loadmat('Synthetic_Access_SNR10.mat')
-x=mat_contents['Y']
-x_c=mat_contents['E_bundles']
-E=mat_contents['E_VCA']
-
+fname = 'Synthetic_Access.mat'
+mat_contents=loadmat('Synthetic_Access.mat')
+x=mat_contents['Y_T']
+x_c = mat_contents['Yc_T']
+E=mat_contents['E_bundles_SNR20']
+E=E.reshape(1,5,200)
 l_vca=0.5
 l_1=0
+drop = 0.0001
 use_bias = False
 activation_set=LeakyReLU(0.2)
 initializer = initializers.glorot_normal()
@@ -109,70 +109,103 @@ rand_y = np.random.RandomState(42)
 def E_reg(weight_matrix):
         return l_vca*SAD(weight_matrix,E)+l_1*tf.reduce_mean(tf.matmul(tf.transpose(weight_matrix,perm=[1,0]),weight_matrix))
 
-def custom_loss_wrapper(abundances):
-    def custom_loss(y_true, y_pred):
-        return SAD(y_true,y_pred)+l_1*tf.norm(abundances,ord=1)#+l_lap*A_lp
-    return custom_loss
 
-
-
-def create_model(input_dim, latent_dim, verbose=True, save_graph=False):
-    inputs = Input(shape=(input_dim,))
-    ###########encoder###########################################################
+def create_model_pre(input_dim, latent_dim, verbose=True, save_graph=False):
+    autoencoder_input = Input(shape=(input_dim,))
     encoder = Sequential()
-    encoder.add(Dense(intermediate_dim1, input_shape=(input_dim,), activation='relu',name='Dense_1'))
-    encoder.add(Dense(latent_dim * 9, input_shape=(input_dim,),use_bias=use_bias, kernel_regularizer=None, kernel_initializer=None,
-                            activation=activation_set))
-            # en coded = BatchNormalization()(encoded)
-    encoder.add(Dense(latent_dim * 6, use_bias=use_bias, kernel_regularizer=None, kernel_initializer=None,
-                            activation=activation_set))
-    encoder.add(Dense(latent_dim*3, use_bias=use_bias, kernel_regularizer=None, kernel_initializer=None,
-                            activation=activation_set))
-    encoder.add(Dense(latent_dim, use_bias=use_bias, kernel_regularizer=None, kernel_initializer=None,
-                            activation=activation_set))
-    encoder.add(BatchNormalization())
-        # Soft Thresholding
-    encoder.add(utils.SparseReLU(alpha_initializer='zero', alpha_constraint=non_neg(), activity_regularizer=None))
-        # Sum To One (ASC)
-    encoder.add(utils.SumToOne(axis=0, name='abundances', activity_regularizer=None))
+    encoder.add(Dense(latent_dim * 9, input_shape=(input_dim,), use_bias=True, kernel_regularizer=None,
+                      kernel_initializer=None,
+                      activation=activation_set))
+    # en coded = BatchNormalization()(encoded)
+    encoder.add(Dense(latent_dim * 6, use_bias=True, kernel_regularizer=None, kernel_initializer=None,
+                      activation=activation_set))
+    encoder.add(Dense(latent_dim * 3, use_bias=True, kernel_regularizer=None, kernel_initializer=None,
+                      activation=activation_set))
+    encoder.add(Dense(latent_dim, use_bias=True, kernel_regularizer=None, kernel_initializer=None,
+                      activation=activation_set))
 
+    encoder.add(BatchNormalization())
+    # Soft Thresholding
+    encoder.add(utils.SparseReLU(alpha_initializer='zero', alpha_constraint=non_neg(), activity_regularizer=None))
+    # Sum To One (ASC)
+    encoder.add(utils.SumToOne(axis=0, name='abundances', activity_regularizer=None))
+    ################################################################################################################
+    drop_layer = Sequential()
+    drop_layer.add(GaussianDropout(drop))
+    # encoder.add(GaussianDropout(0.0001))
     #########################################Decoder############################
     decoder = Sequential()
-
     decoder.add(Dense(input_dim, input_shape=(latent_dim,), activation='linear', name='endmembers', use_bias=use_bias,
-                     kernel_constraint=non_neg(), kernel_regularizer=E_reg, kernel_initializer=initializer))
-    encoder_output = encoder(inputs)
-    autoencoder = Model(autoencoder_input, decoder(encoder_output))
-    autoencoder.compile(optimizer, loss=SAD)
-    return autoencoder, encoder, decoder
-    autoencoder.compile(optimizer,loss=SAD)
+                      kernel_constraint=non_neg(), kernel_regularizer=E_reg, kernel_initializer=initializer))
+
+    encoder_output = encoder(autoencoder_input)
+    drop_out = drop_layer(encoder_output)
+    autoencoder = Model(autoencoder_input, decoder(drop_out))
+
+    # autoencoder.compile(optimizer,loss=SAD,metrics=[utils.SAD])
+
     if verbose:
         print("Autoencoder Architecture")
         print(autoencoder.summary())
 
+    return autoencoder, encoder, decoder
 
+def create_model_UN(input_dim, latent_dim, verbose=True, save_graph=False):
+    autoencoder_input = Input(shape=(input_dim,))
+    encoder = Sequential()
+    encoder.add(Dense(latent_dim * 9, input_shape=(input_dim,), use_bias=True, kernel_regularizer=None,
+                      kernel_initializer=None,
+                      activation=activation_set))
+    # en coded = BatchNormalization()(encoded)
+    encoder.add(Dense(latent_dim * 6, use_bias=True, kernel_regularizer=None, kernel_initializer=None,
+                      activation=activation_set))
+    encoder.add(Dense(latent_dim * 3, use_bias=True, kernel_regularizer=None, kernel_initializer=None,
+                      activation=activation_set))
+    encoder.add(Dense(latent_dim, use_bias=True, kernel_regularizer=None, kernel_initializer=None,
+                      activation=activation_set))
 
-    return autoencoder,encoder,decoder
+    encoder.add(BatchNormalization())
+    # Soft Thresholding
+    encoder.add(utils.SparseReLU(alpha_initializer='zero', alpha_constraint=non_neg(), activity_regularizer=None))
+    # Sum To One (ASC)
+    encoder.add(utils.SumToOne(axis=0, name='abundances', activity_regularizer=None))
+    ################################################################################################################
+    encoder = Model(autoencoder_input, encoder(autoencoder_input), name='encoder_UN')
+    encoder.summary()
+    return encoder
 
     
 def train(n_samples, batch_size, n_epochs):
-        autoencoder_base, encoder_base, decoder_base = create_model(input_dim=input_dim, latent_dim=FLAGS.latent_dim)
-        inputs_a = Input(shape=(input_dim))
-        inputs_b = Input(shape=(input_dim))
-        encoder_output_a = encoder_base(inputs_a)
-        encoder_output_b = encoder_base(inputs_b)
+    inputs_a = Input(shape=(input_dim))
+    inputs_b = Input(shape=(input_dim))
+    autoencoder_pre, encoder_pre, decoder_base = create_model_pre(input_dim=input_dim, latent_dim=FLAGS.latent_dim)
+    encoder_UN= create_model_UN(input_dim=input_dim, latent_dim=FLAGS.latent_dim)
+    # decoder_base.get_layer('endmembers').set_weights(E_weight)
 
-        decoder_output_a = decoder_base(encoder_output_a)
-        decoder_output_b = decoder_base(encoder_output_b)
-        autoencoder = Model([inputs_a, inputs_b], [decoder_output_a, decoder_output_b])
-        autoencoder.compile(optimizer,loss=SAD)
+    encoder_output_a=encoder_pre(inputs_a)
+    encoder_output_b = encoder_UN(inputs_b)
 
-        autoencoder.fit(x=[x, x_c], y=[x, x_c],epochs=n_epochs, batch_size=batch_size, verbose=0,callbacks=[evaluator],shuffle=True)
+    decoder_output_a = decoder_base(encoder_output_a)
+    decoder_output_b = decoder_base(encoder_output_b)
+    autoencoder=Model([inputs_a,inputs_b],[decoder_output_a,decoder_output_b])
+    # autoencoder.compile(optimizer, loss=custom_loss_wrapper(encoder_output_a, encoder_output_b))
+    autoencoder.compile(optimizer, loss=SAD)
 
-        E=decoder_base.get_layer('endmembers').get_weights()[0]
-        A,_= encoder_base.predict(x, x_c)
-        Y,_=autoencoder.predict(x, x_c)
-        return A,Y,E
+
+    past = datetime.now()
+    for epoch in np.arange(1, n_epochs + 1):
+        autoencoder_losses = []
+        autoencoder_history = autoencoder.fit(x=[x_c,x], y=[x_c,x], epochs=1, batch_size=batch_size,
+                                                   verbose=0)
+        autoencoder_losses.append(autoencoder_history.history["loss"])
+        now = datetime.now()
+        print("\nEpoch {}/{} - {:.1f}s".format(epoch, n_epochs, (now - past).total_seconds()))
+        print("Autoencoder Loss: {}".format(np.mean(autoencoder_losses)))
+    A = encoder_UN.predict(x, batch_size=batch_size)
+    A_c = encoder_UN.predict(x_c, batch_size=batch_size)
+    E = decoder_base.get_layer('endmembers').get_weights()
+    Yc ,Y= autoencoder.predict([x_c,x],batch_size=batch_size)
+    return A,  Y,E
 
 
 
