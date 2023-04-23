@@ -1,0 +1,9 @@
+tqdm
+h5py
+scikit-image
+scikit-learn
+tensorflow
+numpy
+scipy
+matplotlib
+seaborn
